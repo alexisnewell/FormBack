@@ -1,0 +1,22 @@
+# Python virtual environments
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Generated output
+output/
+output_lite/
+
+# Video files
+videos/
+*.mp4
+*.mov
+*.avi
+
+# IDE and system files
+.vscode/
+.idea/
+.DS_Store
