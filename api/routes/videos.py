@@ -1,23 +1,27 @@
-
-from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
 from pathlib import Path
 import uuid
 
+from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
+
+from api.schema.video import (
+    AnalysisStartResponse,
+    ErrorResponse,
+    JobStatus,
+    StatusResponse,
+    UploadResponse,
+)
+from api.services import analysis_service as service
+
 router = APIRouter()
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-UPLOAD_DIR = PROJECT_ROOT / "uploads"
-
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 MAX_FILE_SIZE = 500 * 1024 * 1024
 
-# Temporary in-memory storage for analysis jobs.
-# Later, we will move this into a database.
-ANALYSES = {}
 
-
-@router.post("/upload")
+@router.post(
+    "/upload",
+    response_model=UploadResponse,
+    responses={400: {"model": ErrorResponse}, 413: {"model": ErrorResponse}},
+)
 async def upload_video(file: UploadFile = File(...)):
 
     if Path(file.filename or "").suffix.lower() != ".mp4":
@@ -27,7 +31,7 @@ async def upload_video(file: UploadFile = File(...)):
         )
 
     video_id = str(uuid.uuid4())
-    video_path = UPLOAD_DIR / f"{video_id}.mp4"
+    video_path = service.video_path(video_id)
 
     file_size = 0
 
@@ -44,6 +48,9 @@ async def upload_video(file: UploadFile = File(...)):
 
                 buffer.write(chunk)
 
+        # Reject files that are not really decodable videos.
+        info = service.inspect_video(video_path)
+
     except Exception:
         video_path.unlink(missing_ok=True)
         raise
@@ -51,122 +58,44 @@ async def upload_video(file: UploadFile = File(...)):
     finally:
         await file.close()
 
-    return {
-        "video_id": video_id,
-        "filename": file.filename,
-        "status": "uploaded",
-        "size_bytes": file_size
-    }
-
-
-# Runs after the API responds to the analysis request.
-def run_analysis(video_id: str, video_path: Path):
-
-    try:
-        from src.pipeline import analyze_video
-
-        result = analyze_video(video_path)
-
-        if result["error"]:
-            ANALYSES[video_id] = {
-                "status": "failed",
-                "error": result["error"]
-            }
-            return
-
-        ANALYSES[video_id] = {
-            "status": "completed",
-            "analysis_status": result["status"],
-            "summary": result["summary"],
-            "files": result["files"]
-        }
-
-    except Exception as exc:
-        ANALYSES[video_id] = {
-            "status": "failed",
-            "error": f"{type(exc).__name__}: {exc}"
-        }
-
-
-@router.post("/{video_id}/analyze")
-def start_analysis(
-    video_id: str,
-    background_tasks: BackgroundTasks
-):
-
-    video_path = UPLOAD_DIR / f"{video_id}.mp4"
-
-    if not video_path.exists():
-        raise HTTPException(
-            status_code=404,
-            detail="Video not found."
-        )
-
-    existing = ANALYSES.get(video_id)
-
-    if existing and existing["status"] == "processing":
-        raise HTTPException(
-            status_code=409,
-            detail="Analysis is already processing."
-        )
-
-    ANALYSES[video_id] = {
-        "status": "processing"
-    }
-
-    background_tasks.add_task(
-        run_analysis,
-        video_id,
-        video_path
+    return UploadResponse(
+        video_id=video_id,
+        filename=file.filename,
+        size_bytes=file_size,
+        **info
     )
 
-    return {
-        "video_id": video_id,
-        "status": "processing",
-        "message": "Video analysis started."
-    }
+
+@router.post(
+    "/{video_id}/analyze",
+    response_model=AnalysisStartResponse,
+    responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
+)
+def start_analysis(video_id: str, background_tasks: BackgroundTasks):
+
+    video_id = service.normalize_video_id(video_id)
+    video_path = service.begin_analysis(video_id)
+
+    background_tasks.add_task(service.run_analysis, video_id, video_path)
+
+    return AnalysisStartResponse(
+        video_id=video_id,
+        status=JobStatus.processing,
+        message="Video analysis started."
+    )
 
 
-@router.get("/{video_id}/status")
+@router.get(
+    "/{video_id}/status",
+    response_model=StatusResponse,
+    responses={404: {"model": ErrorResponse}},
+)
 def get_analysis_status(video_id: str):
 
-    if video_id not in ANALYSES:
-        raise HTTPException(
-            status_code=404,
-            detail="No analysis found for this video."
-        )
+    job = service.get_job(video_id)
 
-    return {
-        "video_id": video_id,
-        "status": ANALYSES[video_id]["status"]
-    }
-
-
-@router.get("/{video_id}/results")
-def get_analysis_results(video_id: str):
-
-    if video_id not in ANALYSES:
-        raise HTTPException(
-            status_code=404,
-            detail="No analysis found for this video."
-        )
-
-    analysis = ANALYSES[video_id]
-
-    if analysis["status"] == "processing":
-        raise HTTPException(
-            status_code=202,
-            detail="Analysis is still processing."
-        )
-
-    if analysis["status"] == "failed":
-        raise HTTPException(
-            status_code=500,
-            detail=analysis["error"]
-        )
-
-    return {
-        "video_id": video_id,
-        "status": analysis["analysis_status"],
-        "summary": analysis["summary"]
-    }
+    return StatusResponse(
+        video_id=service.normalize_video_id(video_id),
+        status=job.status,
+        error=job.error
+    )
