@@ -1,0 +1,50 @@
+{
+  "fps": 119.96,
+  "per_side": {
+    "left": {
+      "stride_time_s": {"median": 0.631, "iqr": 0.036, "n": 27},
+      "contact_time_s": {"median": 0.283, "iqr": 0.027, "n": 27},
+      "flight_time_s": {"median": 0.03, "iqr": 0.005, "n": 14},
+      "duty_factor": {"median": 0.448, "iqr": 0.024, "n": 27},
+      "knee_flexion_at_contact_deg": {"median": 39.435, "iqr": 5.24, "n": 25},
+      "peak_stance_knee_flexion_deg": {"median": 39.435, "iqr": 5.24, "n": 25},
+      "ankle_ahead_of_pelvis_leg_lengths": {"median": 0.31, "iqr": 0.132, "n": 27},
+      "mean_trunk_lean_deg": {"median": 3.599, "iqr": 1.654, "n": 27},
+      "vertical_oscillation_pct_leg": {"median": 13.399, "iqr": 7.241, "n": 27},
+      "foot_strike_angle_deg": {"median": 0.919, "iqr": 10.693, "n": 27}
+    },
+    "right": {
+      "stride_time_s": {"median": 0.619, "iqr": 0.012, "n": 12},
+      "contact_time_s": {"median": 0.292, "iqr": 0.013, "n": 12},
+      "flight_time_s": {"median": 0.025, "iqr": 0.005, "n": 12},
+      "duty_factor": {"median": 0.466, "iqr": 0.01, "n": 12},
+      "knee_flexion_at_contact_deg": {"median": 32.363, "iqr": 2.994, "n": 8},
+      "peak_stance_knee_flexion_deg": {"median": 33.418, "iqr": 4.08, "n": 8},
+      "ankle_ahead_of_pelvis_leg_lengths": {"median": 0.326, "iqr": 0.084, "n": 12},
+      "mean_trunk_lean_deg": {"median": 3.64, "iqr": 0.74, "n": 12},
+      "vertical_oscillation_pct_leg": {"median": 10.501, "iqr": 2.089, "n": 12},
+      "foot_strike_angle_deg": {"median": -7.061, "iqr": 6.239, "n": 12}
+    }
+  },
+  "warnings": ["Foot-strike angle too variable (IQR 9 deg) to classify; not reported."],
+  "cadence_spm": 191.2,
+  "step_time_symmetry_index_pct": 3.6,
+  "contact_time_s_symmetry_index_pct": 3.1,
+  "knee_flexion_at_contact_deg_symmetry_index_pct": 19.7,
+  "knee_valid_stride_fraction": 0.85,
+  "foot_strike_pattern_approx": null,
+  "nonpositive_flight_fraction": 0.04,
+  "metric_confidence": {
+    "cadence, stride time, step symmetry, trunk lean": "high",
+    "contact time, flight time, duty factor": "unvalidated: depends on toe-off timing; check with validate_events.py",
+    "knee flexion (contact, peak stance)": "medium: 2D view, far-leg occlusion, sensitive to contact timing",
+    "ankle ahead of pelvis": "medium: changes with speed; use a steady section (--window)",
+    "vertical oscillation": "low: landmark jitter and camera bob inflate it",
+    "foot strike angle": "low: heel/toe landmarks are noisy"
+  },
+  "quality": {"score": 0.89, "label": "good", "landmark_coverage": 0.9, "valid_stride_fraction": 0.95, "stride_time_cv": 0.032, "frames": 2730},
+  "direction": "left",
+  "estimated_cycle_period_s": 0.638,
+  "toe_off_offset_frames": 0,
+  "window_s": null
+}

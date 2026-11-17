@@ -3,8 +3,8 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from api.routes import results, videos
-from api.services.analysis_service import AnalysisError
+from api.routes import videos
+from api.services.report_service import AnalysisError
 
 app = FastAPI(title="FormBack API")
 
@@ -27,18 +27,11 @@ async def analysis_error_handler(request: Request, exc: AnalysisError):
     )
 
 
-# Register video routes
+# Register video routes: upload, analyze, status and results
 app.include_router(
     videos.router,
     prefix="/api/videos",
     tags=["Videos"]
-)
-
-# Results share the same URL prefix: /api/videos/{video_id}/results
-app.include_router(
-    results.router,
-    prefix="/api/videos",
-    tags=["Results"]
 )
 
 
