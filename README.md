@@ -1,3 +1,4 @@
+![alt text](image.png)
 # FormBack — Video Recording Guide
 
 For accurate running-form analysis, follow these recording guidelines.
