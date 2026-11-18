@@ -1,33 +1,15 @@
 ![alt text](image-1.png)
 ![alt text](image.png)
-# FormBack — Video Recording Guide
+# FormBack 
+**FormBack** is a running-form analysis tool that gives feedback from a single side-on video.
 
-For accurate running-form analysis, follow these recording guidelines.
-
-## Recording Requirements
-
-**Camera Position**
-- Record from a direct side view (90° to the runner).
-- Keep the camera stationary on a tripod or stable surface.
-- Avoid panning, zooming, or moving the camera.
-
-**Runner Visibility**
-- Keep the full body visible, from head to feet.
-- Ensure both legs and feet are clearly visible.
-- Avoid loose clothing or objects that obscure body landmarks.
-
-**Video Quality**
-- Landscape orientation preferred.
-- 1080p recommended (720p minimum).
-- 30 FPS minimum (60 FPS preferred).
-- 10–30 seconds long.
-- MP4 or MOV format.
-- Bright, even lighting.
-
-**Running Instructions**
-- Run naturally at a consistent pace.
-- Begin running before entering the recording area.
-- Maintain your normal running form throughout the video.
+- **Upload:** add a short MP4 of yourself running, filmed from the side.
+- **Analysis:** pose estimation tracks your body, detects each foot strike and measures every stride.
+- **Metrics:** cadence, ground contact time, flight time, knee flexion, trunk lean, vertical oscillation and foot strike pattern.
+- **Left vs. right:** per-leg results with an asymmetry score for each metric.
+- **Insights:** a separate tab turns the numbers into plain-language feedback on what looks good and what is worth a closer look.
+- **Reliability:** each metric has a confidence rating, and clips too poor to measure are flagged instead of showing misleading numbers.
+- **Stack:** FastAPI backend and a React + TypeScript + Vite frontend.
 
 ## Pre-Upload Checklist
 
