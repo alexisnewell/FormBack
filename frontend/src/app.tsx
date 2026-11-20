@@ -669,7 +669,8 @@ function ResultsView({
   upload: UploadResponse;
   results: Results;
 }) {
-  const { quality, warnings = [], metrics, analysis, diagnostics } = results;
+    const { quality, metrics, analysis, diagnostics } = results;
+    const warnings: string[] = [];
   const [tab, setTab] = useState<"metrics" | "insights">("metrics");
   const insights = metrics ? buildInsights(metrics, diagnostics) : [];
   const lowQuality = results.analysis_status === "low_quality";

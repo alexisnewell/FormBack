@@ -1,8 +1,11 @@
-import cv2
-import csv
 import argparse
+import csv
+import os
+import time
 
 from pathlib import Path
+
+import cv2
 
 from src.pose_estimator import PoseEstimator
 
@@ -13,9 +16,12 @@ from src.pose_estimator import PoseEstimator
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-MODEL_PATH = PROJECT_ROOT / "models" / "pose_landmarker_heavy.task"
+MODEL_PATH = PROJECT_ROOT / "models" / "pose_landmarker_full.task"
 
 OUTPUT_DIR = PROJECT_ROOT / "output"
+
+# Longest side (pixels) of the frame handed to the pose model.
+DEFAULT_INFER_MAX_SIDE = 640
 
 # Landmarks below this visibility are drawn in orange (thin) instead of hidden,
 # so you can see where the model is unsure rather than having limbs vanish.
@@ -39,6 +45,16 @@ CONNECTIONS = [
     (24, 26), (26, 28),
     (28, 30), (30, 32),
     (27, 31), (28, 32)
+]
+
+CSV_HEADER = [
+    "frame",
+    "timestamp_ms",
+    "landmark",
+    "x",
+    "y",
+    "z",
+    "visibility"
 ]
 
 
@@ -103,9 +119,26 @@ def draw_skeleton(frame, landmarks, width, height):
 # VIDEO PROCESSING
 # --------------------------------------------------
 
-def process_video(video_path):
+def process_video(
+    video_path,
+    write_video=False,
+    frame_stride=1,
+    infer_max_side=DEFAULT_INFER_MAX_SIDE,
+):
+    """
+    Extract pose landmarks from a video into output/<stem>_landmarks.csv.
+
+    write_video:    also render output/<stem>_annotated.mp4 (slow; the
+                    analysis does not need it).
+    frame_stride:   run the model on every Nth frame only. Leave at 1 unless
+                    you have checked the results: gait_analysis treats the
+                    skipped frames as missing data, which lowers the
+                    landmark-coverage quality score.
+    infer_max_side: longest side of the frame given to the model.
+    """
 
     video_path = Path(video_path)
+    frame_stride = max(1, int(frame_stride))
 
     if not video_path.exists():
         raise FileNotFoundError(
@@ -126,6 +159,10 @@ def process_video(video_path):
     output_csv = OUTPUT_DIR / (
         video_path.stem + "_landmarks.csv"
     )
+
+    # Written first, then renamed, so a crash can never leave a half-finished
+    # *_landmarks.csv behind for the pipeline to reuse as a cache.
+    temp_csv = output_csv.with_suffix(".csv.tmp")
 
     # ----------------------------------------------
     # 1. OPEN VIDEO
@@ -161,6 +198,10 @@ def process_video(video_path):
     print(f"Duration: {duration:.2f} seconds")
     print(f"Frames: {frame_count}")
     print(f"Model: {MODEL_PATH.name}")
+    print(f"Inference size: longest side {infer_max_side or 'original'}")
+
+    if frame_stride > 1:
+        print(f"Frame stride: {frame_stride} (every {frame_stride}th frame)")
 
     if duration < 10 or duration > 60:
         print(
@@ -168,104 +209,99 @@ def process_video(video_path):
         )
 
     # ----------------------------------------------
-    # 2. INITIALIZE VIDEO OUTPUT
+    # 2. OPTIONAL ANNOTATED VIDEO
     # ----------------------------------------------
 
-    try:
-        writer = open_writer(output_video, fps, (width, height))
-    except RuntimeError:
-        cap.release()
-        raise
+    writer = None
+
+    if write_video:
+        try:
+            writer = open_writer(
+                output_video, fps / frame_stride, (width, height)
+            )
+        except RuntimeError:
+            cap.release()
+            raise
 
     frame_index = 0
+    processed = 0
     frames_without_pose = 0
+    rows = []
+
+    t_read = 0.0
+    t_detect = 0.0
+    t_start = time.perf_counter()
 
     # ----------------------------------------------
-    # 3. INITIALIZE POSE ESTIMATOR
+    # 3. PROCESS FRAMES
     # ----------------------------------------------
 
     try:
 
-        with PoseEstimator(MODEL_PATH) as estimator:
+        with PoseEstimator(MODEL_PATH, infer_max_side) as estimator:
 
-            with open(
-                output_csv,
-                "w",
-                newline="",
-                encoding="utf-8"
-            ) as csv_file:
+            while True:
 
-                csv_writer = csv.writer(csv_file)
+                t0 = time.perf_counter()
 
-                csv_writer.writerow([
-                    "frame",
-                    "timestamp_ms",
-                    "landmark",
-                    "x",
-                    "y",
-                    "z",
-                    "visibility"
-                ])
+                # grab() advances without the BGR conversion, so skipped
+                # frames cost less than a full read().
+                if not cap.grab():
+                    break
 
-                # ----------------------------------
-                # 4. PROCESS EACH FRAME
-                # ----------------------------------
+                if frame_index % frame_stride:
+                    frame_index += 1
+                    t_read += time.perf_counter() - t0
+                    continue
 
-                while True:
+                success, frame = cap.retrieve()
 
-                    success, frame = cap.read()
+                t_read += time.perf_counter() - t0
 
-                    if not success:
-                        break
+                if not success:
+                    break
 
-                    timestamp_ms = int(
-                        round(frame_index * 1000 / fps)
+                timestamp_ms = int(
+                    round(frame_index * 1000 / fps)
+                )
+
+                t0 = time.perf_counter()
+
+                result = estimator.estimate(
+                    frame,
+                    timestamp_ms
+                )
+
+                t_detect += time.perf_counter() - t0
+
+                # ------------------------------
+                # EXTRACT LANDMARKS
+                # ------------------------------
+
+                if result.pose_landmarks:
+
+                    landmarks = result.pose_landmarks[0]
+
+                    rows.extend(
+                        (
+                            frame_index,
+                            timestamp_ms,
+                            landmark_id,
+                            landmark.x,
+                            landmark.y,
+                            landmark.z,
+                            getattr(landmark, "visibility", "")
+                        )
+                        for landmark_id, landmark in enumerate(landmarks)
                     )
 
-                    # Pose estimation runs on the clean frame, before drawing.
-                    result = estimator.estimate(
-                        frame,
-                        timestamp_ms
-                    )
-
-                    # ----------------------------------
-                    # 5. EXTRACT LANDMARKS
-                    # ----------------------------------
-
-                    if result.pose_landmarks:
-
-                        landmarks = result.pose_landmarks[0]
-
-                        for landmark_id, landmark in enumerate(
-                            landmarks
-                        ):
-
-                            csv_writer.writerow([
-                                frame_index,
-                                timestamp_ms,
-                                landmark_id,
-                                landmark.x,
-                                landmark.y,
-                                landmark.z,
-                                getattr(
-                                    landmark,
-                                    "visibility",
-                                    ""
-                                )
-                            ])
-
-                        # ----------------------------------
-                        # 6. DRAW SKELETON
-                        # ----------------------------------
-
+                    if writer is not None:
                         draw_skeleton(frame, landmarks, width, height)
 
-                    else:
-                        frames_without_pose += 1
+                else:
+                    frames_without_pose += 1
 
-                    # ----------------------------------
-                    # 7. ADD FRAME INFORMATION
-                    # ----------------------------------
+                if writer is not None:
 
                     cv2.putText(
                         frame,
@@ -277,29 +313,63 @@ def process_video(video_path):
                         2
                     )
 
-                    # ----------------------------------
-                    # 8. SAVE PROCESSED FRAME
-                    # ----------------------------------
-
                     writer.write(frame)
 
-                    frame_index += 1
+                processed += 1
+                frame_index += 1
 
-                    if frame_index % 30 == 0:
-                        print(
-                            f"Processed {frame_index} frames..."
-                        )
+                if processed % 100 == 0:
+                    print(
+                        f"Processed {processed} frames..."
+                    )
+
+        # ------------------------------------------
+        # 4. WRITE CSV ONCE, THEN PUBLISH IT
+        # ------------------------------------------
+
+        with open(
+            temp_csv,
+            "w",
+            newline="",
+            encoding="utf-8"
+        ) as csv_file:
+
+            csv_writer = csv.writer(csv_file)
+            csv_writer.writerow(CSV_HEADER)
+            csv_writer.writerows(rows)
+
+        os.replace(temp_csv, output_csv)
 
     finally:
 
         cap.release()
-        writer.release()
+
+        if writer is not None:
+            writer.release()
+
+        if temp_csv.exists():
+            temp_csv.unlink()
+
+    total = time.perf_counter() - t_start
 
     print("\nProcessing complete!")
 
+    print(f"Frames processed: {processed}")
     print(f"Frames with no pose detected: {frames_without_pose}")
-    print(f"Annotated video: {output_video}")
+
+    if write_video:
+        print(f"Annotated video: {output_video}")
+
     print(f"Landmark data: {output_csv}")
+
+    if processed:
+        print(
+            f"Timing: {total:.1f}s total "
+            f"({processed / total:.1f} frames/s) | "
+            f"detection {t_detect:.1f}s | "
+            f"video read {t_read:.1f}s | "
+            f"other {max(0.0, total - t_detect - t_read):.1f}s"
+        )
 
 
 # --------------------------------------------------
@@ -317,6 +387,31 @@ if __name__ == "__main__":
         help="Path to input running video"
     )
 
+    parser.add_argument(
+        "--annotate",
+        action="store_true",
+        help="also write the annotated video (slower)"
+    )
+
+    parser.add_argument(
+        "--stride",
+        type=int,
+        default=1,
+        help="process every Nth frame (default 1 = all frames)"
+    )
+
+    parser.add_argument(
+        "--infer-size",
+        type=int,
+        default=DEFAULT_INFER_MAX_SIDE,
+        help="longest side of the frame given to the model, 0 = original"
+    )
+
     args = parser.parse_args()
 
-    process_video(args.video)
+    process_video(
+        args.video,
+        write_video=args.annotate,
+        frame_stride=args.stride,
+        infer_max_side=args.infer_size,
+    )
