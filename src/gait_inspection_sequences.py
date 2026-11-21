@@ -1,93 +1,201 @@
+"""
+Contact sheet of frames around each detected gait event, for checking by eye.
+
+Reads the <stem>_events.csv written by gait_analysis.py (columns: side,
+event, frame, ...) and a video. Use the annotated video to see the skeleton:
+
+    python -m src.video_processor clip.mp4 --annotate
+    python -m src.gait_inspection_sequences output/clip_annotated.mp4
+
+Frame numbers only line up if landmarks were extracted with the default
+frame stride of 1.
+"""
+
+import argparse
+from pathlib import Path
 
 import cv2
 import pandas as pd
-import math
-from pathlib import Path
 
-VIDEO_PATH = "output/video1_running_annotated.mp4"
-EVENTS_PATH = "output/video1_gait_events.csv"
-OUTPUT_PATH = "output/gait_event_sequences.png"
+LABEL_HEIGHT = 25
 
-video = cv2.VideoCapture(VIDEO_PATH)
+EVENT_SHORT = {"initial_contact": "IC", "toe_off": "TO"}
 
-if not video.isOpened():
-    raise RuntimeError("Could not open annotated video.")
 
-events = pd.read_csv(EVENTS_PATH)
+def default_events_path(video_path):
 
-# Five frames around each candidate event.
-offsets = [-2, -1, 0, 1, 2]
+    stem = video_path.stem.replace("_annotated", "")
 
-tile_width = 320
-tile_height = 180
-label_height = 25
+    return video_path.parent / f"{stem}_events.csv"
 
-rows = []
 
-for _, event in events.iterrows():
+def select_events(events, side, kind, limit):
 
-    event_frame = int(event["frame"])
-    side = event["side"]
+    if side:
+        events = events[events["side"] == side]
 
-    tiles = []
+    if kind:
+        events = events[events["event"] == kind]
 
-    for offset in offsets:
+    if limit:
+        events = events.head(limit)
 
-        frame_number = event_frame + offset
+    return events
 
-        video.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+
+def collect_frames(video, needed, tile_size):
+    """Decode the video once, keeping only the needed frames, resized."""
+
+    wanted = set(needed)
+    last = max(wanted)
+    frames = {}
+
+    index = 0
+
+    while index <= last:
+
         success, frame = video.read()
 
         if not success:
-            continue
+            break
 
-        frame = cv2.resize(
-            frame,
-            (tile_width, tile_height)
+        if index in wanted:
+            frames[index] = cv2.resize(
+                frame, tile_size, interpolation=cv2.INTER_AREA
+            )
+
+        index += 1
+
+    return frames
+
+
+def build_sheet(video_path, events_path, output_path, offsets,
+                tile_height, side, kind, limit):
+
+    video = cv2.VideoCapture(str(video_path))
+
+    if not video.isOpened():
+        raise RuntimeError(f"Could not open video: {video_path}")
+
+    width = int(video.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(video.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    # Keep the video's own aspect ratio (portrait clips stay portrait).
+    tile_size = (round(tile_height * width / height), tile_height)
+
+    events = pd.read_csv(events_path)
+
+    if not {"frame", "side"}.issubset(events.columns):
+        raise ValueError("Events CSV needs 'frame' and 'side' columns.")
+
+    events = select_events(events, side, kind, limit)
+
+    if events.empty:
+        raise RuntimeError("No events match the selection.")
+
+    needed = {
+        int(event["frame"]) + offset
+        for _, event in events.iterrows()
+        for offset in offsets
+    }
+
+    frames = collect_frames(video, needed, tile_size)
+
+    video.release()
+
+    rows = []
+    skipped = 0
+
+    for _, event in events.iterrows():
+
+        event_frame = int(event["frame"])
+
+        kind_label = EVENT_SHORT.get(
+            event.get("event", ""), str(event.get("event", ""))
         )
 
-        label = (
-            f"{side.upper()} | "
-            f"Frame {frame_number} | "
-            f"Offset {offset:+d}"
+        tiles = []
+
+        for offset in offsets:
+
+            frame_number = event_frame + offset
+
+            if frame_number not in frames:
+                break
+
+            tile = frames[frame_number].copy()
+
+            label = (
+                f"{str(event['side']).upper()} {kind_label} | "
+                f"F{frame_number} | {offset:+d}"
+            )
+
+            cv2.rectangle(
+                tile, (0, 0), (tile_size[0], LABEL_HEIGHT), (0, 0, 0), -1
+            )
+
+            cv2.putText(
+                tile, label, (5, 18),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1
+            )
+
+            tiles.append(tile)
+
+        if len(tiles) == len(offsets):
+            rows.append(cv2.hconcat(tiles))
+        else:
+            skipped += 1
+
+    if not rows:
+        raise RuntimeError("No event sequences could be extracted.")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    cv2.imwrite(str(output_path), cv2.vconcat(rows))
+
+    print("\nGait sequence inspection complete.")
+    print(f"Events shown: {len(rows)} (skipped near video edges: {skipped})")
+    print(f"Frames per event: {len(offsets)}")
+    print(f"Saved: {output_path}")
+
+
+if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser(
+        description="Contact sheet of frames around each gait event."
+    )
+
+    parser.add_argument("video", help="Annotated (or original) video")
+    parser.add_argument("--events", help="Events CSV (default: <stem>_events.csv beside the video)")
+    parser.add_argument("--out", help="Output PNG (default: <stem>_event_sequences.png)")
+    parser.add_argument("--side", choices=["left", "right"])
+    parser.add_argument("--event", choices=["initial_contact", "toe_off"])
+    parser.add_argument("--max-events", type=int, help="Only the first N events")
+    parser.add_argument("--span", type=int, default=2, help="Frames either side of each event (default 2)")
+    parser.add_argument("--tile-height", type=int, default=360)
+
+    args = parser.parse_args()
+
+    video_path = Path(args.video)
+
+    events_path = (
+        Path(args.events) if args.events else default_events_path(video_path)
+    )
+
+    output_path = (
+        Path(args.out) if args.out
+        else video_path.parent / (
+            video_path.stem.replace("_annotated", "") + "_event_sequences.png"
         )
+    )
 
-        cv2.rectangle(
-            frame,
-            (0, 0),
-            (tile_width, label_height),
-            (0, 0, 0),
-            -1
-        )
-
-        cv2.putText(
-            frame,
-            label,
-            (5, 18),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.42,
-            (255, 255, 255),
-            1
-        )
-
-        tiles.append(frame)
-
-    if len(tiles) == len(offsets):
-
-        rows.append(cv2.hconcat(tiles))
-
-video.release()
-
-if not rows:
-    raise RuntimeError("No event sequences could be extracted.")
-
-sheet = cv2.vconcat(rows)
-
-Path("output").mkdir(exist_ok=True)
-
-cv2.imwrite(OUTPUT_PATH, sheet)
-
-print("\nGait sequence inspection complete.")
-print("Candidate events:", len(rows))
-print("Frames per event:", len(offsets))
-print("Saved:", OUTPUT_PATH)
+    build_sheet(
+        video_path,
+        events_path,
+        output_path,
+        offsets=list(range(-args.span, args.span + 1)),
+        tile_height=args.tile_height,
+        side=args.side,
+        kind=args.event,
+        limit=args.max_events,
+    )

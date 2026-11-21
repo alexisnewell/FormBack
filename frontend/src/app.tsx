@@ -192,22 +192,22 @@ function buildInsights(
   const cadence = m.overall.cadence_spm;
   if (cadence != null) {
     const c = Math.round(cadence);
-    if (cadence < 160) {
+    if (cadence < 150) {
       add({
         id: "cadence",
         tone: "info",
         title: "Cadence is on the lower side",
         detail:
-          "Many runners land between roughly 165 and 185 steps per minute at easy-to-moderate paces, though the right number depends on your height, speed and leg length. A modest increase (about 5%) shortens each stride and often reduces braking.",
+          "Recreational runners average about 165 steps per minute at easy paces, and cadence rises with speed, so a low number at a slow pace is common. A modest increase (about 5%) shortens each stride and often reduces braking.",
         facts: [`${c} spm`],
       });
-    } else if (cadence <= 190) {
+    } else if (cadence <= 185) {
       add({
         id: "cadence",
         tone: "good",
         title: "Cadence is in a typical range",
         detail:
-          "Your step rate sits in the range most runners fall into. It naturally rises with speed, so compare it between clips at a similar pace.",
+          "Most recreational runners land between about 155 and 175 at easy paces, higher when faster. Compare between clips at a similar pace.",
         facts: [`${c} spm`],
       });
     } else {
@@ -216,7 +216,7 @@ function buildInsights(
         tone: "info",
         title: "Cadence is high",
         detail:
-          "A high step rate is common at fast paces and for shorter runners. If this clip was an easy run, check that the detected steps are correct.",
+          "A high step rate is common at fast paces and for shorter runners. If this was an easy run, check that the detected steps are correct.",
         facts: [`${c} spm`],
       });
     }
@@ -239,7 +239,7 @@ function buildInsights(
           tone: "warn",
           title: `Left and right differ in ${big.length === 1 ? label(big[0].k).toLowerCase() : `${big.length} metrics`}`,
           detail:
-            "Differences of 10% or more are worth a closer look. Camera angle and short clips can create apparent asymmetry, so film a second clip before reading much into it. If it persists, or you have pain on one side, a coach or physio can help.",
+          "Some difference between legs is normal, and in a large study of recreational runners asymmetry wasn't linked to injury risk. Video measurement adds its own error, so film a second clip before reading much into it.",
           facts: facts(big),
         },
         big[0].k !== "step_time" ? big[0].k : undefined,
@@ -298,18 +298,13 @@ function buildInsights(
   }
 
   if (ahead != null) {
-    const overstrideHint =
-      pattern === "rearfoot" && cadence != null && cadence < 160;
     add(
       {
         id: "overstride",
-        tone: overstrideHint ? "warn" : "info",
-        title: overstrideHint
-          ? "Possible overstriding"
-          : "Foot placement relative to your hips",
-        detail: overstrideHint
-          ? "A rearfoot strike combined with a low cadence is a common overstriding pattern, where the foot lands well ahead of the body and acts as a brake. Slightly quicker, shorter steps often help."
-          : "This is how far the ankle is ahead of the pelvis at contact, in leg lengths. Higher values mean the foot lands further in front of you. Track it across clips rather than judging a single number.",
+        tone: "info",
+        title: "Foot placement relative to your hips",
+        detail:
+          "This is how far the ankle is ahead of the pelvis at contact, in leg lengths. Higher values mean the foot lands further in front of you. There's no agreed cutoff for overstriding, so track it across clips rather than judging a single number.",
         facts: [`${ahead.toFixed(2)} leg lengths ahead`],
       },
       "ankle_ahead_of_pelvis_leg_lengths",
@@ -327,7 +322,7 @@ function buildInsights(
           tone: "info",
           title: "Very upright posture",
           detail:
-            "You run nearly vertical. A slight forward lean from the ankles (a few degrees) is typical and can help you fall into your stride.",
+            "A larger lean shifts load from the knee toward the hip and can raise energy cost. Check whether it comes from the hips or from the whole body tilting, and whether it eases at a slower pace.",
           facts: [`${lean.toFixed(1)}° trunk lean`],
         },
         "mean_trunk_lean_deg",
@@ -654,9 +649,7 @@ function InsightsView({ insights }: { insights: Insight[] }) {
         ))}
       </ul>
       <p className="fb-muted fb-foot">
-        These are rule-of-thumb readings of your numbers, based on typical
-        ranges for recreational runners. They are general movement insights, not
-        a diagnosis or medical advice.
+      Comparisons are based on published studies of recreational runners see read me for more info.
       </p>
     </section>
   );

@@ -1,200 +1,180 @@
+"""
+Joint-angle time series from MediaPipe landmarks.
+
+Uses the same conditioning and conventions as gait_analysis.py, so numbers
+here agree with the ones the app reports:
+
+  * pixel coordinates from the real video size (no aspect distortion)
+  * low-visibility landmarks masked, short gaps filled, tracks low-passed
+  * knee flexion  = 180 - included hip-knee-ankle angle (0 = straight leg)
+  * trunk lean    = shoulder-midpoint vs pelvis-midpoint line from vertical,
+                    positive = leaning toward the running direction
+  * hip flexion   = thigh swing + trunk lean (positive = flexion,
+                    negative = extension); signed, unlike an included angle
+  * ankle         = dorsiflexion (+) / plantarflexion (-) relative to a
+                    perpendicular foot; approximate, because MediaPipe's
+                    heel and toe landmarks are noisy
+
+Usage:
+    python -m src.biomechanics output/clip_landmarks.csv --video path/to/clip.mp4
+    python -m src.biomechanics output/clip_landmarks.csv --width 1080 --height 1920
+"""
 
 import argparse
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import matplotlib
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-
-def calculate_angle(a, b, c):
-    """Calculate the angle ABC in degrees. B is the middle point."""
-
-    a = np.asarray(a, dtype=float)
-    b = np.asarray(b, dtype=float)
-    c = np.asarray(c, dtype=float)
-
-    ba = a - b
-    bc = c - b
-
-    denominator = np.linalg.norm(ba) * np.linalg.norm(bc)
-
-    if denominator < 1e-8:
-        return np.nan
-
-    cosine = np.dot(ba, bc) / denominator
-    cosine = np.clip(cosine, -1.0, 1.0)
-
-    return float(np.degrees(np.arccos(cosine)))
+from src.gait_analysis import (
+    SIDES,
+    build_tracks,
+    estimate_fps,
+    facing_sign,
+    included_angle,
+    load_landmarks,
+    video_dimensions,
+)
 
 
-def get_point(frame, landmark_id, width, height):
-    """Return landmark coordinates converted from normalized values to pixels."""
+def forward_angle(vec, direction, from_up):
+    """
+    Angle of an image-space vector from vertical, in degrees.
 
-    row = frame.loc[frame["landmark"] == landmark_id]
+    Positive means pointing toward the running direction. from_up=True
+    measures from straight up (trunk), False from straight down (thigh).
+    Image y grows downward, hence the sign flip.
+    """
 
-    if row.empty:
-        return None
+    dy = -vec[:, 1] if from_up else vec[:, 1]
 
-    row = row.iloc[0]
-
-    x = row["x"]
-    y = row["y"]
-
-    if not np.isfinite(x) or not np.isfinite(y):
-        return None
-
-    # Convert normalized MediaPipe coordinates to pixel coordinates.
-    x_pixel = x * width
-    y_pixel = y * height
-
-    return np.array([x_pixel, y_pixel], dtype=float)
+    return np.degrees(np.arctan2(direction * vec[:, 0], dy))
 
 
-def angle_from_frame(frame, a_id, b_id, c_id, width, height):
-    """Calculate an angle from three landmarks in one frame."""
+def ankle_dorsiflexion(knee, ankle, heel, toe):
+    """Dorsiflexion (+) / plantarflexion (-): 90 deg minus shank-foot angle."""
 
-    a = get_point(frame, a_id, width, height)
-    b = get_point(frame, b_id, width, height)
-    c = get_point(frame, c_id, width, height)
+    shank = knee - ankle
+    foot = toe - heel
 
-    if a is None or b is None or c is None:
-        return np.nan
+    den = np.linalg.norm(shank, axis=1) * np.linalg.norm(foot, axis=1)
+    cosine = np.clip((shank * foot).sum(axis=1) / den, -1.0, 1.0)
 
-    return calculate_angle(a, b, c)
+    return 90.0 - np.degrees(np.arccos(cosine))
+
+
+def compute_angles(tracks, direction):
+    """Return a dict of per-frame angle arrays from conditioned tracks."""
+
+    pelvis = (tracks["l_hip"] + tracks["r_hip"]) / 2
+    shoulder = (tracks["l_sh"] + tracks["r_sh"]) / 2
+
+    trunk = forward_angle(shoulder - pelvis, direction, from_up=True)
+
+    out = {"trunk_lean_deg": trunk}
+
+    for side, p in SIDES.items():
+
+        hip = tracks[f"{p}_hip"]
+        knee = tracks[f"{p}_knee"]
+        ankle = tracks[f"{p}_ank"]
+
+        thigh = forward_angle(knee - hip, direction, from_up=False)
+
+        out[f"{side}_knee_flexion_deg"] = 180.0 - included_angle(
+            hip, knee, ankle
+        )
+
+        out[f"{side}_hip_flexion_deg"] = thigh + trunk
+
+        out[f"{side}_ankle_dorsiflexion_deg"] = ankle_dorsiflexion(
+            knee, ankle, tracks[f"{p}_heel"], tracks[f"{p}_toe"]
+        )
+
+    return out
 
 
 def process_landmarks(csv_path, width, height):
 
     csv_path = Path(csv_path)
 
-    data = pd.read_csv(csv_path)
-
-    required = {
-        "frame", "timestamp_ms", "landmark", "x", "y"
-    }
-
-    if not required.issubset(data.columns):
-        raise ValueError(
-            f"CSV must contain columns: {sorted(required)}"
-        )
-
     if width <= 0 or height <= 0:
         raise ValueError("Video width and height must be positive.")
 
-    data["landmark"] = pd.to_numeric(
-        data["landmark"], errors="coerce"
-    )
-    data["x"] = pd.to_numeric(data["x"], errors="coerce")
-    data["y"] = pd.to_numeric(data["y"], errors="coerce")
+    df = load_landmarks(csv_path)
+    fps = estimate_fps(df)
 
-    results = []
+    tracks = build_tracks(df, width, height, fps)
+    direction = facing_sign(tracks)
 
-    # MediaPipe landmark IDs:
-    # Shoulder 11/12, hip 23/24, knee 25/26,
-    # ankle 27/28, foot index 31/32.
+    angles = compute_angles(tracks, direction)
 
-    for frame_number, frame in data.groupby("frame", sort=True):
+    n_frames = len(next(iter(angles.values())))
 
-        frame = frame.drop_duplicates(
-            subset="landmark", keep="last"
-        )
+    table = pd.DataFrame({
+        "frame": np.arange(n_frames),
+        "time_seconds": np.arange(n_frames) / fps,
+        **angles,
+    })
 
-        timestamp = frame["timestamp_ms"].iloc[0]
+    base = csv_path.stem.replace("_landmarks", "")
+    output_csv = csv_path.parent / f"{base}_joint_angles.csv"
+    output_plot = csv_path.parent / f"{base}_joint_angles.png"
 
-        row = {
-            "frame": frame_number,
-            "timestamp_ms": timestamp,
-            "time_seconds": timestamp / 1000.0,
-        }
+    table.to_csv(output_csv, index=False)
 
-        # Knee angles
-        row["left_knee_angle"] = angle_from_frame(
-            frame, 23, 25, 27, width, height
-        )
+    fig, axes = plt.subplots(3, 1, figsize=(12, 9), sharex=True)
 
-        row["right_knee_angle"] = angle_from_frame(
-            frame, 24, 26, 28, width, height
-        )
+    for ax, name, title in (
+        (axes[0], "knee_flexion_deg", "Knee flexion (0 = straight)"),
+        (axes[1], "hip_flexion_deg", "Hip flexion (+) / extension (-)"),
+        (axes[2], "ankle_dorsiflexion_deg", "Ankle dorsiflexion (+) / plantarflexion (-), approximate"),
+    ):
+        for side in SIDES:
+            ax.plot(table["time_seconds"], table[f"{side}_{name}"], label=side.capitalize())
 
-        # Hip included angles
-        row["left_hip_included_angle"] = angle_from_frame(
-            frame, 11, 23, 25, width, height
-        )
+        ax.set_ylabel("degrees")
+        ax.set_title(title)
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc="upper right")
 
-        row["right_hip_included_angle"] = angle_from_frame(
-            frame, 12, 24, 26, width, height
-        )
+    axes[-1].set_xlabel("Time (seconds)")
+    fig.tight_layout()
+    fig.savefig(output_plot, dpi=150)
+    plt.close(fig)
 
-        # Approximate ankle angles using foot index
-        row["left_ankle_proxy_angle"] = angle_from_frame(
-            frame, 25, 27, 31, width, height
-        )
-
-        row["right_ankle_proxy_angle"] = angle_from_frame(
-            frame, 26, 28, 32, width, height
-        )
-
-        results.append(row)
-
-    angles = pd.DataFrame(results)
-
-    output_dir = csv_path.parent
-
-    base_name = csv_path.stem.replace("_landmarks", "")
-
-    output_csv = output_dir / f"{base_name}_joint_angles.csv"
-    output_plot = output_dir / f"{base_name}_joint_angles.png"
-
-    angles.to_csv(output_csv, index=False)
-
-    # Plot knee angles over time
-    plt.figure(figsize=(12, 5))
-
-    plt.plot(
-        angles["time_seconds"],
-        angles["left_knee_angle"],
-        label="Left knee"
-    )
-
-    plt.plot(
-        angles["time_seconds"],
-        angles["right_knee_angle"],
-        label="Right knee"
-    )
-
-    plt.xlabel("Time (seconds)")
-    plt.ylabel("Included knee angle (degrees)")
-    plt.title("Knee angles throughout the running video")
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-
-    plt.savefig(output_plot, dpi=150)
-    plt.close()
-
-    print("\nBiomechanics analysis complete.")
-    print(f"Video dimensions: {width} x {height}")
+    print("\nJoint-angle analysis complete.")
+    print(f"Video size used: {width} x {height}, {fps:.1f} fps, "
+          f"running direction: {'right' if direction > 0 else 'left'}")
     print(f"Angle data: {output_csv}")
-    print(f"Knee angle graph: {output_plot}")
+    print(f"Graph: {output_plot}")
 
-    print("\nMean angles across valid frames:")
+    print("\nMedian and 5th-95th percentile (valid frames only):")
 
-    angle_columns = [
-        "left_knee_angle",
-        "right_knee_angle",
-        "left_hip_included_angle",
-        "right_hip_included_angle",
-        "left_ankle_proxy_angle",
-        "right_ankle_proxy_angle",
-    ]
+    for column in angles:
 
-    for column in angle_columns:
+        values = table[column].to_numpy()
+        valid = values[np.isfinite(values)]
+
+        if valid.size == 0:
+            print(f"{column}: no valid frames")
+            continue
+
+        # Rounding first turns tiny negatives like -1e-15 into a clean 0.0.
+        valid = np.round(valid, 1) + 0.0
+        low, high = np.percentile(valid, [5, 95])
+
         print(
-            f"{column}: {angles[column].mean():.2f} degrees"
+            f"{column}: median {np.median(valid):.1f}, "
+            f"range {low:.1f} to {high:.1f} "
+            f"({valid.size / n_frames:.0%} of frames valid)"
         )
 
-    return angles
+    return table
 
 
 if __name__ == "__main__":
@@ -203,29 +183,23 @@ if __name__ == "__main__":
         description="Calculate running joint angles from pose landmarks."
     )
 
-    parser.add_argument(
-        "csv",
-        help="Path to the landmark CSV"
-    )
+    parser.add_argument("csv", help="Path to the landmark CSV")
 
     parser.add_argument(
-        "--width",
-        type=int,
-        default=720,
-        help="Original video width in pixels"
+        "--video",
+        help="Original video (its size is read from the file)"
     )
 
-    parser.add_argument(
-        "--height",
-        type=int,
-        default=1280,
-        help="Original video height in pixels"
-    )
+    parser.add_argument("--width", type=int, help="Video width in pixels")
+    parser.add_argument("--height", type=int, help="Video height in pixels")
 
     args = parser.parse_args()
 
-    process_landmarks(
-        args.csv,
-        args.width,
-        args.height
-    )
+    if args.video:
+        width, height = video_dimensions(args.video)
+    elif args.width and args.height:
+        width, height = args.width, args.height
+    else:
+        parser.error("give --video, or both --width and --height")
+
+    process_landmarks(args.csv, width, height)
