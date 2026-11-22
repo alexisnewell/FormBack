@@ -1,0 +1,18 @@
+FormBack
+Copyright (c) <YEAR> <YOUR NAME>
+<Add your own license statement here once you have chosen one.>
+
+This product includes third-party components:
+
+MediaPipe (Python package and Tasks API)
+  Copyright Google LLC and the MediaPipe authors
+  Licensed under the Apache License, Version 2.0
+  (full text in THIRD_PARTY_LICENSES/Apache-2.0.txt)
+  https://github.com/google-ai-edge/mediapipe
+
+pose_landmarker_full.task
+  (MediaPipe Pose Landmarker "Full", BlazePose GHUM 3D model bundle)
+  Google LLC
+  License: Apache License, Version 2.0, as stated in the model card
+  [TODO: confirm this against the model card, then delete this line]
+  https://developers.google.com/edge/mediapipe/solutions/vision/pose_landmarker

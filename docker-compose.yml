@@ -1,0 +1,11 @@
+services:
+  formback:
+    image: ghcr.io/alexisnewell/formback:latest
+    build: .
+    ports:
+      # Bound to this computer only, so the app isn't exposed to your network.
+      - "127.0.0.1:8000:8000"
+    volumes:
+      # Results are kept in ./output on your machine. Uploaded videos are not.
+      - ./output:/app/output
+    restart: unless-stopped
