@@ -10,9 +10,6 @@ __pycache__/
 output/
 output_lite/
 
-# Model files
-models/*.task
-
 # Video files
 videos/
 *.mp4
