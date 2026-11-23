@@ -1,12 +1,13 @@
 from pathlib import Path
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Response, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Query, Response, UploadFile
 
 from api.schemas.analysis import (
     AnalysisStartResponse,
     ErrorResponse,
     JobStatus,
+    ReportFormat,
     ResultsResponse,
     StatusResponse,
     UploadResponse,
@@ -126,3 +127,33 @@ def get_analysis_results(video_id: str, response: Response):
         response.status_code = 202
 
     return service.build_results(video_id, job)
+
+
+@router.get(
+    "/{video_id}/report",
+    response_class=Response,
+    responses={
+        200: {
+            "description": "The report file.",
+            "content": {"application/pdf": {}, "text/csv": {}},
+        },
+        404: {"model": ErrorResponse},
+        409: {
+            "model": ErrorResponse,
+            "description": "Still processing, failed, or low quality (no report).",
+        },
+    },
+)
+def download_report(
+    video_id: str,
+    fmt: ReportFormat = Query(ReportFormat.pdf, alias="format"),
+):
+    """Download the analysis as a PDF (with charts) or a CSV of all metrics."""
+
+    content, media_type, filename = service.export_report(video_id, fmt)
+
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

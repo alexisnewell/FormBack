@@ -10,6 +10,7 @@ here, in this order:
     PIPELINE        video -> landmarks -> gait analysis -> files on disk
     JOB STORE       in-memory state of each analysis (swap for a DB later)
     REPORT BUILDING raw summary dict -> the clean models in schemas/analysis.py
+    EXPORT          clean models -> downloadable PDF / CSV (see report_export.py)
     PUBLIC API      what the routes call
 
 Command line (runs the full pipeline without the API):
@@ -36,8 +37,10 @@ from api.schemas.analysis import (
     Metrics,
     OverallMetrics,
     QualityInfo,
+    ReportFormat,
     ResultsResponse,
 )
+from api.services import report_export
 from api.services.gait_analysis import analyze, plot_cycles, plot_debug
 
 
@@ -48,7 +51,7 @@ from api.services.gait_analysis import analyze, plot_cycles, plot_debug
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 VIDEOS_DIR = PROJECT_ROOT / "videos"
 OUTPUT_DIR = PROJECT_ROOT / "output"
-MODEL_PATH = PROJECT_ROOT / "models" / "pose_landmarker_heavy.task"
+MODEL_PATH = PROJECT_ROOT / "models" / "pose_landmarker_full.task"
 
 VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -105,6 +108,11 @@ class AnalysisNotFound(AnalysisError):
 class AnalysisInProgress(AnalysisError):
     status_code = 409
     detail = "Analysis is already processing."
+
+
+class ReportUnavailable(AnalysisError):
+    status_code = 409
+    detail = "No report is available for this analysis."
 
 
 # --------------------------------------------------
@@ -514,6 +522,50 @@ def build_results(video_id: str, job: Job) -> ResultsResponse:
         response.metrics = build_metrics(summary)
 
     return response
+
+
+# --------------------------------------------------
+# EXPORT
+# --------------------------------------------------
+
+EXPORT_MEDIA_TYPES = {
+    ReportFormat.pdf: "application/pdf",
+    ReportFormat.csv: "text/csv; charset=utf-8",
+}
+
+
+def export_report(video_id: str, fmt: ReportFormat) -> Tuple[bytes, str, str]:
+    """Build a downloadable report. Returns (content, media_type, filename).
+
+    Built from build_results(), so the quality gate applies automatically:
+    there is no report (and no CSV) when the metrics were withheld.
+    """
+    video_id = normalize_video_id(video_id)
+    job = get_job(video_id)
+
+    if job.status == JobStatus.processing:
+        raise AnalysisInProgress("Analysis is still processing.")
+    if job.status == JobStatus.failed:
+        raise ReportUnavailable("The analysis failed, so there is no report.")
+
+    results = build_results(video_id, job)
+    if results.metrics is None:
+        raise ReportUnavailable(
+            "This analysis was low quality, so no report is available. "
+            "Try a clip with better framing and lighting."
+        )
+
+    if fmt == ReportFormat.csv:
+        content = report_export.build_csv(results)
+    else:
+        charts = {
+            name: OUTPUT_DIR / f"{video_id}{ARTEFACT_SUFFIXES[name]}"
+            for name in ("cycles_plot", "debug_plot")
+        }
+        content = report_export.build_pdf(results, video_id, charts)
+
+    filename = f"formback-report-{video_id[:8]}.{fmt.value}"
+    return content, EXPORT_MEDIA_TYPES[fmt], filename
 
 
 # --------------------------------------------------

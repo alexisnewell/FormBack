@@ -59,4 +59,43 @@ export const getAnalysisResults = async (
   return response.data;
 };
 
+export type ReportFormat = "pdf" | "csv";
+
+function saveBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// Downloads the report and hands it to the browser as a file.
+export const downloadReport = async (
+  videoId: string,
+  format: ReportFormat
+): Promise<void> => {
+  try {
+    const response = await api.get(`/videos/${videoId}/report`, {
+      params: { format },
+      responseType: "blob",
+    });
+
+    saveBlob(response.data, `formback-report-${videoId.slice(0, 8)}.${format}`);
+  } catch (err) {
+    // With responseType "blob" an error body also arrives as a Blob. Turn it
+    // back into JSON so callers can read `err.response.data.detail` as usual.
+    if (axios.isAxiosError(err) && err.response?.data instanceof Blob) {
+      try {
+        err.response.data = JSON.parse(await err.response.data.text());
+      } catch {
+        /* not JSON; leave it */
+      }
+    }
+    throw err;
+  }
+};
+
 export default api;

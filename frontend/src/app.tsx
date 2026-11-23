@@ -2,9 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChangeEvent, DragEvent } from "react";
 import axios from "axios";
 import {
+  downloadReport,
   getAnalysisResults,
   startAnalysis,
   uploadVideo,
+  type ReportFormat,
   type UploadResponse,
 } from "./api";
 import "./App.css";
@@ -509,6 +511,51 @@ function InsightsIcon() {
 
 function Spinner() {
   return <span className="fb-spinner" aria-hidden="true" />;
+}
+
+function ReportActions({ videoId }: { videoId: string }) {
+  const [busy, setBusy] = useState<ReportFormat | null>(null);
+  const [error, setError] = useState<string>();
+
+  const download = async (format: ReportFormat) => {
+    setBusy(format);
+    setError(undefined);
+    try {
+      await downloadReport(videoId, format);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="fb-report">
+      <span className="fb-report-title">Download report</span>
+      <div className="fb-report-actions">
+        <button
+          className="fb-btn fb-btn-primary"
+          disabled={busy !== null}
+          onClick={() => download("pdf")}
+        >
+          {busy === "pdf" ? "Preparing…" : "PDF"}
+        </button>
+        <button
+          className="fb-btn"
+          disabled={busy !== null}
+          onClick={() => download("csv")}
+        >
+          {busy === "csv" ? "Preparing…" : "CSV"}
+        </button>
+      </div>
+      <p className="fb-muted">PDF includes charts. CSV has every metric.</p>
+      {error && (
+        <p className="fb-error" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
+  );
 }
 
 function ConfidenceBadge({ stat }: { stat: MetricStat }) {
@@ -1024,6 +1071,9 @@ export default function App() {
                     {formatBytes(upload.size_bytes)} · {upload.duration_s.toFixed(1)} s ·{" "}
                     {upload.fps.toFixed(0)} fps · {upload.frame_count} frames
                   </p>
+                )}
+                {phase.name === "done" && phase.results.metrics && (
+                  <ReportActions videoId={phase.upload.video_id} />
                 )}
                 <button
                   className="fb-btn"

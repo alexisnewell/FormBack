@@ -172,6 +172,28 @@
   color: #fff;
 }
 
+/* Report download */
+.fb-report {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0;
+}
+.fb-report-title {
+  font-weight: 600;
+  color: var(--text-h);
+}
+.fb-report-actions {
+  display: flex;
+  gap: 8px;
+}
+.fb-report-actions .fb-btn {
+  flex: 1;
+}
+.fb-report .fb-muted,
+.fb-report .fb-error {
+  margin: 0;
+}
+
 /* Layout */
 .fb-layout {
   display: grid;

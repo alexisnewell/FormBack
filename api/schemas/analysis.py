@@ -41,6 +41,11 @@ class Confidence(str, Enum):
     unvalidated = "unvalidated"
 
 
+class ReportFormat(str, Enum):
+    pdf = "pdf"
+    csv = "csv"
+
+
 class ErrorResponse(BaseModel):
     """Body of every non-2xx response."""
 
